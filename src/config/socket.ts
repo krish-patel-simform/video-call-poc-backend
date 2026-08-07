@@ -6,21 +6,22 @@ export function initSocket(server: Server) {
     cors: { origin: '*' },
   });
 
-  const emailToSocketMap = new Map();
-  const socketIdToEmailMap = new Map();
+  const emailToSocketMap = new Map<string, string>();
+  const socketIdToEmailMap = new Map<string, string>();
 
   io.on('connection', (socket) => {
-    console.log('new Socket connection created:', socket.id);
+    console.log('New Socket connected:', socket.id);
 
+    // 1. Join Room
     socket.on('join-room', ({ roomId, email }, callback) => {
       socket.join(roomId);
 
       emailToSocketMap.set(email, socket.id);
       socketIdToEmailMap.set(socket.id, email);
 
-      console.log(`User ${email} joined room ${roomId} with socket ${socket.id}`);
+      console.log(`User ${email} joined room ${roomId}`);
 
-      // Broadcast to existing members in the room
+      // Notify existing users in the room
       socket.to(roomId).emit('user-joined', { newUserEmail: email });
 
       if (typeof callback === 'function') {
@@ -28,36 +29,47 @@ export function initSocket(server: Server) {
       }
     });
 
+    // 2. Call User (Forward Offer)
     socket.on('call-user', ({ newUserEmail, offer }) => {
       const newUserSocketId = emailToSocketMap.get(newUserEmail);
       const fromUserEmail = socketIdToEmailMap.get(socket.id);
 
-      console.log(
-        `Forwarding call from ${fromUserEmail} (${socket.id}) -> ${newUserEmail} (${newUserSocketId})`,
-      );
-
       if (newUserSocketId) {
         socket.to(newUserSocketId).emit('incomming-call', { offer, fromUserEmail });
-      } else {
-        console.error(`Socket ID for ${newUserEmail} not found!`);
       }
     });
 
+    // 3. Call Accepted (Forward Answer)
     socket.on('call-accepted', ({ emailId, answer }) => {
       const targetSocketId = emailToSocketMap.get(emailId);
-      console.log(`Forwarding accepted call answer to ${emailId} (${targetSocketId})`);
 
       if (targetSocketId) {
-        // Wrap in object { answer } to match client destructuring!
+        // Wrap in { answer } object to match client expectation
         socket.to(targetSocketId).emit('call-accepted', { answer });
+        // Ack the answering side so it knows the connection is proceeding
+        // and can push its own media stream tracks
+        socket.emit('call-accepted-ack');
       }
     });
 
+    // 4. WebRTC ICE Candidates Exchange
+    socket.on('peer:ice-candidate', ({ targetEmail, candidate }) => {
+      const targetSocketId = emailToSocketMap.get(targetEmail);
+
+      if (targetSocketId) {
+        socket.to(targetSocketId).emit('peer:ice-candidate', { candidate });
+      } else {
+        // Fallback: broadcast to room
+        socket.broadcast.emit('peer:ice-candidate', { candidate });
+      }
+    });
+
+    // 5. Disconnect
     socket.on('disconnect', (reason) => {
       const email = socketIdToEmailMap.get(socket.id);
-      emailToSocketMap.delete(email);
+      if (email) emailToSocketMap.delete(email);
       socketIdToEmailMap.delete(socket.id);
-      console.log(`Socket ${socket.id} (${email}) disconnected due to ${reason}`);
+      console.log(`Socket ${socket.id} disconnected (${reason})`);
     });
   });
 }
