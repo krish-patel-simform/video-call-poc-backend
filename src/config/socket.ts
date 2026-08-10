@@ -39,16 +39,12 @@ export function initSocket(server: Server) {
       }
     });
 
-    // 3. Call Accepted (Forward Answer)
+    // 3. Call Accepted (Forward Answer from guest → host)
     socket.on('call-accepted', ({ emailId, answer }) => {
       const targetSocketId = emailToSocketMap.get(emailId);
 
       if (targetSocketId) {
-        // Wrap in { answer } object to match client expectation
         socket.to(targetSocketId).emit('call-accepted', { answer });
-        // Ack the answering side so it knows the connection is proceeding
-        // and can push its own media stream tracks
-        socket.emit('call-accepted-ack');
       }
     });
 
@@ -58,9 +54,6 @@ export function initSocket(server: Server) {
 
       if (targetSocketId) {
         socket.to(targetSocketId).emit('peer:ice-candidate', { candidate });
-      } else {
-        // Fallback: broadcast to room
-        socket.broadcast.emit('peer:ice-candidate', { candidate });
       }
     });
 
